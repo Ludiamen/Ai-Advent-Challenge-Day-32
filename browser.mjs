@@ -1219,6 +1219,66 @@ if (РЕЖИМ === 'ассистент') {
   process.exit(ошибки.length ? 1 : 0);
 }
 
+// День 32: AI-ревью ветки — /review на странице /chat (spec FR-13). Карточка — вердикт, три раздела,
+// находки с файлом и строкой; ход — этапы конвейера под полем ввода.
+const последнееРевью = () => выполнить(`(() => {
+  const все = document.querySelectorAll('#чат-лента .сообщение.ревью');
+  const р = все[все.length - 1];
+  if (!р) return {карточек: 0};
+  return {карточек: все.length, вердикт: р.getAttribute('data-вердикт'),
+          понято: (р.querySelector('.понято') || {}).innerText || '',
+          разделы: [...р.querySelectorAll('.источники .заголовок')].map(з => з.innerText),
+          находки: [...р.querySelectorAll('.находка')].map(н => ({раздел: н.dataset.раздел, серьёзность: н.dataset.серьёзность,
+                                                                текст: н.innerText.slice(0, 200)})),
+          опора: р.querySelectorAll('.находка .мета').length,
+          мета: (р.querySelector(':scope > .мета:last-child') || {}).innerText || ''};
+})()`);
+
+if (РЕЖИМ === 'ревью') {
+  const диапазон = process.env.REVIEW_RANGE || 'main...HEAD';
+  await наСтраницеЧата('/chat');
+  await открытьСессию('проверка-ревью');
+  await новыйРазговорНаСтранице();
+  const подсказка = await выполнить(`(document.getElementById('подсказка-помощи') || {}).innerText || ''`);
+  if (!/\/review/.test(подсказка)) ошибки.push('нет подсказки про /review под полем ввода');
+  const абзац = await выполнить(`(document.getElementById('день-32') || {}).innerText || ''`);
+  if (!/AI-ревью/.test(абзац)) ошибки.push('нет абзаца о Дне 32');
+  const было = (await последнееРевью()).карточек;
+  await выполнить(`(() => { document.getElementById('чат-реплика').value = ${JSON.stringify('/review ' + диапазон)};
+    document.getElementById('чат-отправить').click(); return 'ок'; })()`);
+  const этапы = new Set();
+  let р = {карточек: было};
+  const начало = Date.now();
+  while (Date.now() - начало < 600000) {
+    await new Promise(r => setTimeout(r, 1000));
+    for (const э of await выполнить(`[...document.querySelectorAll('#чат-ход .этап-строка')].map(с => с.innerText)`)) этапы.add(э.replace(/\s+\d+ с.*$/, ''));
+    р = await последнееРевью();
+    if (р.карточек > было) break;
+    const сбой = await выполнить(`(document.querySelector('#чат-ход .ошибка') || {}).innerText || ''`);
+    if (сбой) { ошибки.push('/review: ' + сбой); break; }
+  }
+  console.log('этапы хода:', [...этапы].join(' | ').slice(0, 300));
+  console.log(`карточка: ${р.вердикт}; ${(р.понято || '').slice(0, 100)}`);
+  console.log('разделы:', (р.разделы || []).join('; '));
+  for (const н of (р.находки || []).slice(0, 6)) console.log(`  [${н.раздел}/${н.серьёзность}] ${н.текст.replace(/\s+/g, ' ').slice(0, 140)}`);
+  console.log('мета:', (р.мета || '').replace(/\s+/g, ' ').slice(0, 160));
+  if (р.карточек <= было) ошибки.push('/review: карточка не появилась');
+  if ((р.разделы || []).length !== 3) ошибки.push('/review: в карточке не три раздела');
+  if (process.env.REVIEW_EXPECT && р.вердикт !== process.env.REVIEW_EXPECT) ошибки.push(`/review: вердикт ${р.вердикт}, ожидался ${process.env.REVIEW_EXPECT}`);
+  if (process.env.REVIEW_FILE && !(р.находки || []).some(н => н.текст.includes(process.env.REVIEW_FILE)))
+    ошибки.push(`/review: нет находки по ${process.env.REVIEW_FILE}`);
+  if (![...этапы].some(э => /ревью/.test(э))) ошибки.push('/review: под полем ввода не было хода по этапам');
+  await наСтраницеЧата('/chat');
+  await открытьСессию('проверка-ревью');
+  const после = await последнееРевью();
+  console.log('после перезагрузки карточек ревью:', после.карточек);
+  if (после.карточек !== 1) ошибки.push(`после перезагрузки карточек ревью ${после.карточек}, а не 1`);
+  console.log('\n=== итог ===');
+  console.log('исключений JS и провалов:', ошибки.length ? ошибки : 'нет');
+  ws.close();
+  process.exit(ошибки.length ? 1 : 0);
+}
+
 if (РЕЖИМ === 'офлайн') {
   const п0 = await полосаОфлайна();
   if (!п0) ошибки.push('на главной нет полосы офлайна');
