@@ -20,6 +20,7 @@
 #   bash demo_telegram.sh               # Chrome + запись + показ (службы day31-llm и day31-tg работают)
 #   bash demo_telegram.sh --no-record   # без записи
 #   bash demo_telegram.sh --pause 4000  # длиннее паузы между сценами
+#   MODE=телеграм32 bash demo_telegram.sh   # День 32: только показать уведомление AI-ревью (ничего не отправляет)
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,6 +77,8 @@ if [ "$LOGIN" = 1 ]; then
 fi
 
 KEYS=(показ-админ:админ)
+# День 32 (MODE=телеграм32): только показать уведомление AI-ревью — службы, ключи и /admin не нужны.
+[ "${MODE:-}" = "телеграм32" ] && KEYS=()
 
 cleanup() {
   [ -n "${REC_PID:-}" ] && kill -TERM "$REC_PID" 2>/dev/null && wait "$REC_PID" 2>/dev/null
@@ -86,6 +89,21 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+if [ "${MODE:-}" = "телеграм32" ]; then
+echo "1/5 Бот (только имя — по токену из .env, токен не печатается)…"
+BOT="$("$PY" - "$ROOT/.env" <<'PYCODE'
+import sys, httpx
+from dotenv import dotenv_values
+т = dotenv_values(sys.argv[1]).get("TELEGRAM_BOT_TOKEN", "")
+я = httpx.post(f"https://api.telegram.org/bot{т}/getMe", timeout=30).json()["result"]
+print(f"{я['username']}\t{я['first_name']}")
+PYCODE
+)" || { echo "Bot API не ответил (VPN включён?)"; exit 1; }
+BOT_USERNAME="${BOT%%$'\t'*}"; BOT_TITLE="${BOT#*$'\t'}"
+URL=""; SPKI=""
+mkdir -p "$SCRATCH" && chmod 700 "$SCRATCH"
+printf '{}' > "$SCRATCH/keys.json"
+else
 echo "1/5 Службы, бот и ключ показа…"
 "$PY" "$ROOT/cli.py" --сервис статус | grep -q "active (running)" || {
   echo "Служба day31-llm не работает: python cli.py --сервис старт"; exit 1; }
@@ -111,12 +129,13 @@ printf '{"админ": "%s"}' "$KEY" > "$SCRATCH/keys.json"
 chmod 600 "$SCRATCH/keys.json"
 SPKI="$(openssl x509 -in "$ROOT/memory/service/tls/server.crt" -pubkey -noout | openssl pkey -pubin -outform der \
   | openssl dgst -sha256 -binary | base64)"
+fi
 
 echo "2/5 Chrome с профилем Telegram Web (окно 880 — одна колонка, только чат с @$BOT_USERNAME)…"
 google-chrome --new-window \
   --remote-debugging-port="$DEBUG_PORT" \
   --user-data-dir="$PROFILE" \
-  --ignore-certificate-errors-spki-list="$SPKI" \
+  ${SPKI:+--ignore-certificate-errors-spki-list="$SPKI"} \
   --no-first-run --no-default-browser-check --hide-crash-restore-bubble \
   --window-size=880,980 --window-position=40,40 \
   "about:blank" > "$SCRATCH/chrome.log" 2>&1 &
@@ -139,7 +158,7 @@ echo "3/5 Открываю чат с ботом и скрываю список �
 FILE=""
 if [ "$RECORD" = 1 ]; then
   mkdir -p "$ROOT/demo"
-  FILE="$ROOT/demo/телеграм31-$(date +%Y%m%d-%H%M).mp4"
+  FILE="$ROOT/demo/${MODE:-телеграм31}-$(date +%Y%m%d-%H%M).mp4"
 fi
 CDP="http://127.0.0.1:$DEBUG_PORT" PAUSE="$PAUSE" MARKS="$SCRATCH/marks.json" SERVICE_KEYS="$SCRATCH/keys.json" \
   ADMIN_URL="$URL/admin" BOT_TITLE="$BOT_TITLE" CDP_TIMEOUT=60000 RECORD_CDP="$FILE" \

@@ -209,7 +209,7 @@ if (!РЕЖИМ.startsWith('телеграм')) await начатьЗапись()
 
 console.log('страница:', await выполнить('document.title'));
 // На страницах сервиса Дня 30 выбора модели нет: модель у сервиса одна.
-if (!['сервис', 'показ', 'телеграм', 'телеграм31'].includes(РЕЖИМ)) console.log('модель:', await выполнить(
+if (!['сервис', 'показ', 'телеграм', 'телеграм31', 'телеграм32', 'показ32'].includes(РЕЖИМ)) console.log('модель:', await выполнить(
   `(() => { const с = document.getElementById('модель');
             с.value = ${JSON.stringify(МОДЕЛЬ)};
             с.dispatchEvent(new Event('change'));
@@ -1775,7 +1775,7 @@ if (РЕЖИМ === 'сервис') {
   process.exit(ошибки.length ? 1 : 0);
 }
 
-if (РЕЖИМ === 'телеграм' || РЕЖИМ === 'телеграм31') {
+if (РЕЖИМ === 'телеграм' || РЕЖИМ === 'телеграм31' || РЕЖИМ === 'телеграм32') {
   // Дополнение Дня 30: показ Telegram-бота в Telegram Web владельца (telegram-plan § 6, D-T14).
   // Вкладка открыта сразу на чате с ботом; скрипт пишет ТОЛЬКО в этот чат — перед каждой
   // отправкой сверяет заголовок чата. Сцена 6 — та же вкладка на /admin сервиса.
@@ -1873,6 +1873,23 @@ if (РЕЖИМ === 'телеграм' || РЕЖИМ === 'телеграм31') {
     while (process.env.RECORDING && !fs.existsSync(process.env.RECORDING) && Date.now() < конецОжидания) await подождать(200);
   }
   await начатьЗапись();          // запись через CDP — только теперь, когда список чатов скрыт
+  if (РЕЖИМ === 'телеграм32') {
+    // День 32: уведомление владельцу от AI-ревью PR (эскалация человеку, лекция недели 7). Скрипт
+    // ничего не отправляет — только показывает последние сообщения бота в чате с ним.
+    if (!(await чатБота())) throw new Error('открыт не чат с ботом');
+    await выполнить(`(() => { const п = document.querySelector('.bubbles .scrollable'); if (п) п.scrollTop = п.scrollHeight; return 1; })()`);
+    await подпись('Сцена 5', 'Эскалация человеку: при красном ревью, сбое пайплайна или тревоге метрик Action пишет владельцу в Telegram — номер и ссылка PR, вердикт, счёт находок; без кода и текстов находок');
+    const тексты = await выполнить(`[...document.querySelectorAll('.bubble.is-in')].slice(-6).map(б => (б.querySelector('.message') || {}).innerText || '')`);
+    const уведомления = (тексты || []).filter(т => /AI-ревью PR #\d+/.test(т));
+    console.log('уведомлений AI-ревью в последних сообщениях:', уведомления.length, уведомления.map(т => т.split('\n')[0]));
+    должно(уведомления.length > 0, 'нет уведомления AI-ревью в чате с ботом');
+    await подождать(ПАУЗА * 3);
+    await остановитьЗапись();
+    console.log('\n=== итог показа ===');
+    console.log(замечания.length ? 'РАСХОЖДЕНИЯ:\n  ' + замечания.join('\n  ') : 'показ прошёл без расхождений');
+    ws.close();
+    process.exit(замечания.length ? 1 : 0);
+  }
 
   if (РЕЖИМ === 'телеграм31') {
     // День 31: /help в Telegram — бот спрашивает ассистента разработчика через ручку сервиса.
@@ -2000,6 +2017,143 @@ if (РЕЖИМ === 'телеграм' || РЕЖИМ === 'телеграм31') {
   if (ошибки.length) console.log(`(сообщений консоли страницы: ${ошибки.length} — Telegram Web, не наша страница)`);
   ws.close();
   process.exit(0);          // показ не проверка: код возврата всегда 0
+}
+
+if (РЕЖИМ === 'показ32') {
+  // День 32: AI-ревью PR на GitHub — публичный просмотр без входа в аккаунт, кадры CDP. Сцены —
+  // DEMO-CHROME.md: PR с настоящей доработкой (🟢), прогон Actions, PR с посеянными ошибками (🔴),
+  // исправляющий коммит (FIX_CMD отправляет его) — тот же комментарий становится 🟢.
+  const ПАУЗА = Number(process.env.PAUSE || 3000);
+  const РЕПО = process.env.GH_REPO;
+  const PR1 = process.env.PR_CLEAN, PR2 = process.env.PR_SEEDED;
+  const замечания = [];
+  const метки = [];
+  const подождать = мс => new Promise(р => setTimeout(р, мс));
+  const должно = (условие, чего) => { if (!условие) замечания.push(чего); };
+  const подпись = async (сцена, текст) => {
+    await выполнить(`(() => {
+      let п = document.getElementById('подпись-показа');
+      if (!п) {
+        п = document.createElement('div');
+        п.id = 'подпись-показа';
+        п.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;' +
+          'background:#0f172a;color:#f8fafc;padding:10px 18px;font:16px/1.45 ' +
+          'system-ui,sans-serif;box-shadow:0 -2px 10px rgba(0,0,0,.25)';
+        document.body.appendChild(п);
+      }
+      п.innerHTML = '<b>' + ${JSON.stringify(сцена)} + '</b> — ' + ${JSON.stringify(текст)};
+      return 'ок'; })()`);
+    console.log(`\n=== ${сцена} — ${текст}`);
+  };
+  const открыть = async (адрес) => {
+    await выполнить(`(() => { location.href = ${JSON.stringify(адрес)}; return 'ок'; })()`);
+    await подождать(2500);
+    await ждатьНаСтранице(`document.readyState === 'complete'`, 30000);
+    await подождать(1500);
+  };
+  const комментарий = () => выполнить(`(() => {
+    const к = [...document.querySelectorAll('.markdown-body')].find(e => /AI-ревью:/.test(e.innerText));
+    if (!к) return null;
+    const з = к.querySelector('h2');
+    return {заголовок: з ? з.innerText : '', текст: к.innerText.slice(0, 4000),
+            находок: к.querySelectorAll('li').length}; })()`);
+  const кЭлементу = (выражение, блок = 'start') => выполнить(`(() => { const е = ${выражение};
+    if (е) е.scrollIntoView({behavior: 'smooth', block: ${JSON.stringify(блок)}}); return !!е; })()`);
+  const кКомментарию = () => кЭлементу(`[...document.querySelectorAll('.markdown-body')].find(e => /AI-ревью:/.test(e.innerText))`);
+  const кЗаголовку = (текст) => кЭлементу(`[...document.querySelectorAll('.markdown-body h3, .markdown-body summary')].find(e => e.innerText.includes(${JSON.stringify(текст)}))`);
+  const прокрутить = (пикселей) => выполнить(`(() => { window.scrollBy({top: ${пикселей}, behavior: 'smooth'}); return 'ок'; })()`);
+  const проверкиPR = async (номер) => {
+    const pr = await (await fetch(`https://api.github.com/repos/${РЕПО}/pulls/${номер}`)).json();
+    const р = await (await fetch(`https://api.github.com/repos/${РЕПО}/commits/${pr.head.sha}/check-runs`)).json();
+    return {sha: pr.head.sha, прогоны: (р.check_runs || []).map(c => ({имя: c.name, статус: c.status, итог: c.conclusion, адрес: c.html_url}))};
+  };
+
+  // Сцена 1 — PR с настоящей доработкой.
+  await открыть(`https://github.com/${РЕПО}/pull/${PR1}`);
+  await подпись('Сцена 1', 'День 32: автоматическое AI-ревью кода. На каждый PR GitHub Actions запускает ассистента: diff и изменённые файлы — через git-сервер MCP, опора — документация и код базы PR (RAG), три ревьюера параллельно');
+  await подождать(ПАУЗА * 2);
+  await кКомментарию();
+  const к1 = await комментарий();
+  console.log('PR1:', к1 && к1.заголовок);
+  должно(к1 && /🟢/.test(к1.заголовок), 'PR1: комментарий не 🟢');
+  await подпись('Сцена 1', 'PR с настоящей доработкой (ссылка на журнал прогона в комментарии): 🟢 — критичных находок нет; рекомендации с опорой на документы и код проекта');
+  await подождать(ПАУЗА * 2);
+  await кЗаголовку('Рекомендации');
+  await подождать(ПАУЗА * 2);
+  await выполнить(`(() => { const s = [...document.querySelectorAll('.markdown-body summary')].find(e => e.innerText.includes('Как сделано ревью'));
+    if (s) { s.click(); s.scrollIntoView({behavior: 'smooth', block: 'start'}); } return !!s; })()`);
+  await подпись('Сцена 1', 'Как сделано ревью: файлы и строки diff, вызовы git-сервера MCP, фрагменты опоры (документы, код, места вызова), проверка находок кодом, время и токены каждого ревьюера');
+  await подождать(ПАУЗА * 2.5);
+  await прокрутить(500);
+  await подождать(ПАУЗА);
+  метки.push({что: 'сцена1', когда: Date.now()});
+
+  // Сцена 2 — прогон Actions.
+  const п1 = await проверкиPR(PR1);
+  const прогон1 = (п1.прогоны[0] || {}).адрес;
+  if (прогон1) {
+    await открыть(прогон1);
+    await подпись('Сцена 2', `Пайплайн — workflow ai-review.yml на облачном раннере: checkout, зависимости, индекс базы, AI-ревью; проверка PR: ${(п1.прогоны[0] || {}).итог}. Журнал виден владельцу, итог — в сводке задания`);
+    await подождать(ПАУЗА * 2.5);
+  } else должно(false, 'PR1: нет прогона Actions');
+
+  // Сцена 3 — PR с посеянными ошибками.
+  await открыть(`https://github.com/${РЕПО}/pull/${PR2}`);
+  await подпись('Сцена 3', 'PR с посеянными ошибками: бот отдаёт ответ без маски ПД, веб зовёт модель напрямую мимо общего клиента, git-серверу «только на чтение» добавлен push');
+  await подождать(ПАУЗА * 2);
+  await кКомментарию();
+  const к2 = await комментарий();
+  console.log('PR2:', к2 && к2.заголовок);
+  должно(к2 && /🔴/.test(к2.заголовок), 'PR2: комментарий не 🔴');
+  await подпись('Сцена 3', 'Вердикт 🔴: подтверждённые критичные находки. Красит не модель, а код: файл из PR, строка в изменённом участке, цитата diff найдена');
+  await подождать(ПАУЗА * 2);
+  await кЗаголовку('Потенциальные баги');
+  await подпись('Сцена 3', 'Потенциальные баги — с файлом и строкой, почему это ошибка, как исправить и опорой: фрагменты спек, ARCHITECTURE и места вызова из базы');
+  await подождать(ПАУЗА * 3);
+  await кЗаголовку('Архитектурные проблемы');
+  await подпись('Сцена 3', 'Архитектурные проблемы — нарушения правил проекта: git только на чтение, вызов модели через общий клиент и офлайн-предохранитель');
+  await подождать(ПАУЗА * 3);
+  await кЗаголовку('Рекомендации');
+  await подождать(ПАУЗА * 1.5);
+  await выполнить(`(() => { window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'}); return 'ок'; })()`);
+  await подпись('Сцена 3', 'Проверка PR красная — слияние решает человек; владельцу ушло уведомление в Telegram');
+  await подождать(ПАУЗА * 2);
+  метки.push({что: 'сцена3', когда: Date.now()});
+
+  // Сцена 4 — исправление.
+  if (process.env.FIX_CMD) {
+    const {execSync} = await import('node:child_process');
+    const было = (await проверкиPR(PR2)).sha;
+    await подпись('Сцена 4', 'Исправляю: коммит возвращает маску ПД, убирает прямой вызов модели и push — Action запускается заново на новый коммит');
+    execSync(process.env.FIX_CMD, {stdio: 'inherit'});
+    const начало = Date.now();
+    let п2 = null;
+    while (Date.now() - начало < 600000) {
+      await подождать(10000);
+      п2 = await проверкиPR(PR2);
+      const сек = Math.round((Date.now() - начало) / 1000);
+      await подпись('Сцена 4', `Новый коммит ${п2.sha.slice(0, 7)}: AI-ревью идёт… ${сек} с`);
+      if (п2.sha !== было && п2.прогоны.length && п2.прогоны.every(p => p.статус === 'completed')) break;
+    }
+    метки.push({что: 'ожидание', начало, конец: Date.now()});
+    await открыть(`https://github.com/${РЕПО}/pull/${PR2}`);
+    await кКомментарию();
+    const к3 = await комментарий();
+    console.log('PR2 после исправления:', к3 && к3.заголовок, п2 && п2.прогоны.map(p => p.итог));
+    должно(к3 && /🟢/.test(к3.заголовок), 'PR2 после исправления: комментарий не 🟢');
+    await подпись('Сцена 4', `Тот же комментарий обновлён: ${к3 ? к3.заголовок.replace('🤖 ', '') : '—'} — проверка PR ${п2 && п2.прогоны.every(p => p.итог === 'success') ? 'зелёная' : 'не зелёная'}`);
+    await подождать(ПАУЗА * 2.5);
+    await выполнить(`(() => { window.scrollTo({top: document.body.scrollHeight, behavior: 'smooth'}); return 'ок'; })()`);
+    await подождать(ПАУЗА * 2);
+  }
+  await остановитьЗапись();
+  // Для ускоренной копии — только ожидания (начало и конец): прогон Action после исправления.
+  if (process.env.MARKS) (await import('node:fs')).writeFileSync(process.env.MARKS,
+    JSON.stringify({ожидания: метки.filter(м => м.начало && м.конец)}, null, 1));
+  console.log('\n=== итог показа ===');
+  console.log(замечания.length ? 'расхождения: ' + замечания.join('; ') : 'показ прошёл без расхождений');
+  ws.close();
+  process.exit(замечания.length ? 1 : 0);
 }
 
 if (РЕЖИМ === 'показ31') {

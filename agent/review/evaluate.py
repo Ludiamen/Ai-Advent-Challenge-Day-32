@@ -126,7 +126,15 @@ def судья(клиент: Any, дефект: dict[str, Any], находка: 
                                 серьёзность=находка.серьёзность,
                                 место=f"{находка.файл}:{находка.строка}" if находка.строка else находка.файл,
                                 находка_суть=находка.суть, находка_почему=находка.почему)
-    r = клиент.call(модель, [{"role": "user", "content": текст}], max_tokens=300, temperature=0)
+    r = None
+    for попытка in range(4):     # короткий обрыв сети не должен ронять весь прогон набора
+        try:
+            r = клиент.call(модель, [{"role": "user", "content": текст}], max_tokens=300, temperature=0)
+            break
+        except Exception:  # noqa: BLE001 — LLMError и сетевые: повтор с паузой
+            if попытка == 3:
+                raise
+            time.sleep(15 * (попытка + 1))
     try:
         т = r.text[r.text.find("{"):r.text.rfind("}") + 1]
         return bool(json.loads(т).get("да")), r.total_tokens
