@@ -247,7 +247,8 @@ class GitСервер(unittest.TestCase):
 
         инструменты = anyio.run(список)
         self.assertEqual({и.name for и in инструменты},
-                         {"git_branch", "git_status", "git_ls_files", "git_diff", "git_log", "git_show"})
+                         {"git_branch", "git_status", "git_ls_files", "git_diff", "git_log", "git_show",
+                          "git_changes", "git_grep"})   # два последних — День 32, ревью PR
         for и in инструменты:
             with self.subTest(и.name):
                 self.assertTrue(и.annotations.read_only_hint)

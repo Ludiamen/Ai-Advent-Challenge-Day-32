@@ -33,6 +33,7 @@ import tempfile
     "test_telegram_reliability",
     "test_telegram_security",
     "test_devassist",
+    "test_review",
 )
 
 # Новый security-тест должен входить в снимок до первого commit, но остальные
