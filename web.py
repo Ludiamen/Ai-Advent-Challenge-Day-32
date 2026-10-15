@@ -1363,6 +1363,9 @@ def api_chat_say():
     помощь = _помощь_в_чате(сессия, текст, модель, bool(данные.get("stream")))
     if помощь is not None:
         return помощь
+    ревью = _ревью_в_чате(сессия, текст, модель, bool(данные.get("stream")))
+    if ревью is not None:
+        return ревью
     if данные.get("stream"):
         return _ход_чата_потоком(сессия, текст, модель)
     прежняя = agent.model_key
@@ -1420,6 +1423,52 @@ def _помощь_в_чате(сессия: str, текст: str, модель: 
         метка = progress.наблюдать(очередь.put)
         try:
             очередь.put(ответить())
+        except Exception as exc:   # noqa: BLE001 — поток не должен умереть молча
+            очередь.put({"событие": "ошибка", "error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            progress.снять(метка)
+            очередь.put(None)
+
+    threading.Thread(target=работать, daemon=True).start()
+
+    def строки():
+        while (событие := очередь.get()) is not None:
+            yield _json.dumps(событие, ensure_ascii=False, default=str) + "\n"
+
+    return Response(stream_with_context(строки()), mimetype="application/x-ndjson")
+
+
+def _ревью_в_чате(сессия: str, текст: str, модель: str, поток: bool) -> Response | None:
+    """`/review [диапазон]` на странице чата (День 32, spec FR-13): тот же конвейер, что в консоли
+    и GitHub Actions; итог — карточка в ленте сессии (паритет с консолью). None — это не /review."""
+    import json as _json
+    import queue
+    from agent.devassist import command as help_command
+    from agent.local import progress
+    from agent.review import command
+    try:
+        разбор = command.разобрать(текст)
+    except command.ОшибкаКоманды as exc:
+        return jsonify({"error": str(exc)}), 400
+    if разбор is None:
+        return None
+    от, до = разбор
+
+    def выполнить(этап=None) -> dict:
+        итог = command.выполнить(от, до, модель, "веб", этап=этап)
+        command.в_историю(agent.чат(сессия), от, до, итог, agent.memory.base_dir)
+        return {"событие": "готово", "review": command.карточка(от, до, итог), "state": _состояние_чата(сессия)}
+
+    if not поток:
+        return jsonify(выполнить())
+    очередь: queue.Queue = queue.Queue()
+
+    def работать() -> None:
+        метка = progress.наблюдать(очередь.put)
+        try:
+            # Этапы конвейера приходят наблюдателю progress (этап «ревью» с подписью) — те же
+            # события, что у хода чата: страница рисует ход строками.
+            очередь.put(выполнить())
         except Exception as exc:   # noqa: BLE001 — поток не должен умереть молча
             очередь.put({"событие": "ошибка", "error": f"{type(exc).__name__}: {exc}"})
         finally:

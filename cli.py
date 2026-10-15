@@ -962,6 +962,19 @@ def build_parser() -> argparse.ArgumentParser:
                      help="метрики ответов /help без текстов: число, доля «не знаю» и запасного пути, p50/p95 "
                           "времени, токены — по моделям и каналам (журнал по умолчанию — memory/devassist/metrics.jsonl)")
 
+    рев = parser.add_argument_group("AI-ревью PR (День 32)")
+    рев.add_argument("--ревью", dest="review", nargs="?", const="main...HEAD", default=None, metavar="ДИАПАЗОН",
+                     help="AI-ревью диапазона как PR (база...голова, по умолчанию main...HEAD): три ревьюера "
+                          "параллельно, опора — документы и код базы; без публикации; код выхода 0/1/2 — "
+                          "зелёный/красный/не выполнено")
+    рев.add_argument("--ревью-гитхаб", dest="review_pr", type=int, default=0, metavar="N",
+                     help="PR №N с GitHub: ревью и комментарий в PR (токен GITHUB_PAT из .env)")
+    рев.add_argument("--ревью-метрики", dest="review_metrics", action="store_true",
+                     help="метрики прогонов ревью без текстов: p50/p95, токены и стоимость на PR, доли красных и "
+                          "без сбоев; с --гитхаб — прогоны и оценки 👍/👎 из комментариев репозитория")
+    рев.add_argument("--гитхаб", dest="review_github", action="store_true",
+                     help="для --ревью-метрики: история из комментариев PR на GitHub")
+
     parser.add_argument("--логи", action="store_true", help="подробный журнал работы")
     return parser
 
@@ -1176,6 +1189,89 @@ def команда_индекса(аргументы) -> int | None:
                 print(f"Ошибка: {exc}", file=sys.stderr)
                 return 1
     return None
+
+
+# --- AI-ревью PR (День 32) ---------------------------------------------------------
+
+def ревью_cli(аргументы) -> int | None:
+    """Ключи ревью PR, которым агент не нужен. None — ни одного такого ключа не было."""
+    if getattr(аргументы, "review_metrics", False):
+        return метрики_ревью(getattr(аргументы, "review_github", False))
+    if getattr(аргументы, "review_pr", 0):
+        import review
+        return review.ревью_pr(аргументы.review_pr)
+    if getattr(аргументы, "review", None) is None:
+        return None
+    from agent.review import command
+    try:
+        от, до = command.разобрать(f"/review {аргументы.review}")
+    except command.ОшибкаКоманды as exc:
+        print(f"Ошибка: {exc}", file=sys.stderr)
+        return 1
+    итог = command.выполнить(от, до, getattr(аргументы, "model", "") or "", "консоль",
+                             этап=lambda э, п: print(f"  · {э}{': ' + п if п else ''}", flush=True))
+    print(LINE)
+    print(итог.консоль)
+    print(LINE)
+    return итог.код_выхода
+
+
+def метрики_ревью(с_гитхаба: bool = False) -> int:
+    from agent.review import metrics
+    оценки: list[int] = []
+    if с_гитхаба:
+        import review
+        from agent.review import github
+        try:
+            строки, оценки = github.GitHub(os.environ.get("GITHUB_PAT", ""), review._репозиторий_origin()).история()
+        except github.ОшибкаGitHub as exc:
+            print(f"Ошибка: {exc}", file=sys.stderr)
+            return 1
+        откуда = "комментарии PR на GitHub"
+    else:
+        строки = metrics.прочитать()
+        откуда = metrics.путь_по_умолчанию()
+    print(f"Метрики AI-ревью: {откуда}")
+    if not строки:
+        print("Прогонов ревью ещё не было.")
+        return 0
+    с = metrics.сводка(строки, оценки)
+    print(LINE)
+    print(f"{'модель':14} {'прогонов':>8} {'p50, с':>7} {'p95, с':>7} {'токенов/PR':>11} {'$/PR':>8} "
+          f"{'красных':>8} {'без сбоев':>10}")
+    for модель, д in с["модели"].items():
+        print(f"{модель[:14]:14} {д['прогонов']:>8} {д['p50_с']:>7} {д['p95_с']:>7} {д['токенов_на_pr']:>11} "
+              f"{д['стоимость_на_pr']:>8.4f} {д['доля_красных']:>8.0%} {д['доля_без_сбоев']:>10.0%}")
+    print(LINE)
+    линия = metrics.базовая_линия(строки)
+    if линия:
+        print(f"Базовая линия (медиана последних {int(линия['прогонов'])}): {линия['токены']:.0f} токенов, "
+              f"{линия['секунд']:.0f} с; тревога — больше вдвое.")
+    if с["оценок"]:
+        print(f"Оценки людей: {с['оценок']}, доля 👍 {с['доля_👍']:.0%}.")
+    elif с_гитхаба:
+        print("Оценок людей (реакций 👍/👎 на комментарии ревью) пока нет.")
+    return 0
+
+
+def ревью_в_чате(чат, аргументы, строка: str) -> int | None:
+    """`/review [диапазон]` в консольном чате: None — это не /review; 0 — зелёный; 1 — красный или ошибка."""
+    from agent.devassist import command as help_command
+    from agent.review import command
+    try:
+        разбор = command.разобрать(строка)
+    except command.ОшибкаКоманды as exc:
+        print(f"Ошибка: {exc}")
+        return 1
+    if разбор is None:
+        return None
+    от, до = разбор
+    итог = command.выполнить(от, до, getattr(аргументы, "model", "") or "", "консоль",
+                             этап=lambda э, п: print(f"  · {э}{': ' + п if п else ''}", flush=True))
+    print(LINE)
+    print(итог.консоль)
+    command.в_историю(чат, от, до, итог, help_command.база_памяти())
+    return 0 if итог.код_выхода == 0 else 1
 
 
 # --- ассистент разработчика: проект и его индекс (День 31) -------------------------
@@ -3192,7 +3288,8 @@ def разобрать_серверы(значение: str | None) -> list[str]
 
 # --- мини-чат с RAG и памятью задачи (День 25) ----------------------------------
 
-КОМАНДЫ_ЧАТА = ("/help вопрос — ассистент разработчика о проекте · /память — память задачи · "
+КОМАНДЫ_ЧАТА = ("/help вопрос — ассистент разработчика о проекте · /review [диапазон] — AI-ревью ветки · "
+                "/память — память задачи · "
                 "/история — реплики · /новый — начать заново · /выход")
 ОТМЕТКИ_ЦИТАТ = {"дословно": "✓ дословно", "почти": "≈ почти", "в другом фрагменте": "↪ в другом фрагменте"}
 
@@ -3360,6 +3457,8 @@ def чат_cli(agent: MemoryAgent, аргументы) -> int:
     if аргументы.chat_say:
         for реплика in аргументы.chat_say:
             помощь = помощь_в_чате(чат, аргументы, реплика)
+            if помощь is None:
+                помощь = ревью_в_чате(чат, аргументы, реплика)
             if помощь is not None:
                 if помощь:
                     return помощь
@@ -3397,6 +3496,8 @@ def чат_cli(agent: MemoryAgent, аргументы) -> int:
             напечатать_историю_чата(чат)
             continue
         if помощь_в_чате(чат, аргументы, строка) is not None:
+            continue
+        if ревью_в_чате(чат, аргументы, строка) is not None:
             continue
         if строка == "/новый":
             итог = чат.новый()
@@ -4548,6 +4649,10 @@ def _main(аргументы) -> int:
         os.environ["RAG_EMBEDDER"] = аргументы.rag_embedder
     # День 31: индекс проекта и метрики ассистента агенту не нужны.
     код = проект_cli(аргументы)
+    if код is not None:
+        return код
+    # День 32: ревью PR агенту тоже не нужно — конвейер самостоятельный.
+    код = ревью_cli(аргументы)
     if код is not None:
         return код
 

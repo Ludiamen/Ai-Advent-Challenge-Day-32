@@ -883,5 +883,111 @@ class ЗависимостиРаннера(unittest.TestCase):
         self.assertEqual(пакеты, {"httpx", "python-dotenv", "mcp", "numpy"})
 
 
+class КомандаReview(_Репозиторий):
+    """spec FR-12, FR-13, plan D-16: /review в консоли и вебе — один разбор, один конвейер, паритет."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        import importlib
+        cls.память = tempfile.mkdtemp(prefix="review-test-")
+        cls.прежняя = os.environ.get("MEMORY_DIR")
+        os.environ["MEMORY_DIR"] = cls.память
+        import web as модуль
+        cls.web = importlib.reload(модуль)
+        cls.клиент = cls.web.app.test_client()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        import shutil
+        if cls.прежняя is None:
+            os.environ.pop("MEMORY_DIR", None)
+        else:
+            os.environ["MEMORY_DIR"] = cls.прежняя
+        shutil.rmtree(cls.память, ignore_errors=True)
+        super().tearDownClass()
+
+    def setUp(self) -> None:
+        from agent.review import pipeline
+        настоящий = pipeline.выполнить
+        пусто = {"находки": []}
+        к = _Клиент({"баги": {"находки": [находка()]}, "архитектура": пусто, "рекомендации": пусто})
+        self.вызовы = []
+
+        def выполнить(от, до, **kw):
+            self.вызовы.append((от, до, kw.get("канал"), kw.get("модель")))
+            kw.update(проект=self.проект, git=self.git_mcp(), клиент_для=lambda: к, поиск=Опора.поиск(self))
+            with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "k"}):
+                return настоящий(от, до, **kw)
+        self.подмена = mock.patch.object(pipeline, "выполнить", выполнить)
+        self.подмена.start()
+
+    def tearDown(self) -> None:
+        self.подмена.stop()
+
+    def test_разбор(self) -> None:
+        from agent.review import command
+        self.assertEqual(command.разобрать("/review"), ("main", "HEAD"))
+        self.assertEqual(command.разобрать(" /REVIEW main...pr "), ("main", "pr"))
+        self.assertEqual(command.разобрать("/review main..pr"), ("main", "pr"))
+        self.assertEqual(command.разобрать("/review pr"), ("main", "pr"))
+        self.assertEqual(command.разобрать("/review HEAD~3...HEAD"), ("HEAD~3", "HEAD"))
+        for не in ("/reviewer", "review", "/help", "что такое /review"):
+            self.assertIsNone(command.разобрать(не), не)
+        for плохой in ("/review -x...main", "/review a....b"):
+            with self.subTest(плохой), self.assertRaises(command.ОшибкаКоманды):
+                command.разобрать(плохой)
+
+    def test_консоль(self) -> None:
+        import contextlib
+        import io
+        import cli
+        вывод = io.StringIO()
+        with contextlib.redirect_stdout(вывод):
+            код = cli.выполнить(self.web.agent, cli.build_parser().parse_args(
+                ["--чат", "рев", "--реплика", "/review main...pr"]))
+        текст = вывод.getvalue()
+        self.assertEqual(код, 1)                                  # красное ревью — код 1, как у review.py
+        self.assertIn("Потенциальные баги (1)", текст)
+        self.assertIn("agent/mask.py:3", текст)
+        self.assertEqual(self.вызовы[-1][:3], ("main", "pr", "консоль"))
+        история = self.web.agent.чат("рев").история()
+        self.assertEqual(история[-2]["content"], "/review main...pr")
+        self.assertIn("красный", история[-1]["content"])
+
+    def test_ключ_ревью(self) -> None:
+        import contextlib
+        import io
+        import cli
+        вывод = io.StringIO()
+        with contextlib.redirect_stdout(вывод):
+            with mock.patch("sys.argv", ["cli.py", "--ревью", "main...pr"]):
+                код = cli.main()
+        self.assertEqual(код, 1)
+        self.assertIn("AI-ревью main...pr", вывод.getvalue())
+
+    def test_веб_без_потока_и_с_потоком(self) -> None:
+        итог = self.клиент.post("/api/chat/say", json={"session": "веб-рев", "text": "/review main...pr"}).get_json()
+        р = итог["review"]
+        self.assertEqual((р["вид"], р["вердикт"], р["диапазон"]), ("ревью", "красный", "main...pr"))
+        self.assertEqual(р["находки"][0]["файл"], "agent/mask.py")
+        self.assertEqual(итог["state"]["помощь"][-1]["вид"], "ревью")
+        self.assertEqual(self.вызовы[-1][2], "веб")
+        поток = self.клиент.post("/api/chat/say", json={"session": "веб-рев", "text": "/review pr", "stream": True})
+        строки = [json.loads(с) for с in поток.get_data(as_text=True).splitlines() if с.strip()]
+        self.assertTrue(any(с.get("событие") == "этап" and с.get("этап") == "ревью" for с in строки))
+        self.assertEqual(строки[-1]["событие"], "готово")
+        self.assertEqual(len([п for п in строки[-1]["state"]["помощь"] if п.get("вид") == "ревью"]), 2)
+        плохой = self.клиент.post("/api/chat/say", json={"session": "веб-рев", "text": "/review -x...y"})
+        self.assertEqual(плохой.status_code, 400)
+
+    def test_страница_и_справка(self) -> None:
+        from agent.devassist import command
+        html = self.клиент.get("/chat").get_data(as_text=True)
+        self.assertIn("function ревьюHTML", html)
+        self.assertIn("/review", html)
+        self.assertIn("/review", command.справка("crm"))
+
+
 if __name__ == "__main__":
     unittest.main()
