@@ -1236,6 +1236,14 @@ const последнееРевью = () => выполнить(`(() => {
 
 if (РЕЖИМ === 'ревью') {
   const диапазон = process.env.REVIEW_RANGE || 'main...HEAD';
+  // Подписи — только в записи показа (SHOW_CAPTIONS): проверка без записи идёт без них.
+  const подписьРевью = (текст) => !process.env.SHOW_CAPTIONS ? null : выполнить(`(() => {
+    let п = document.getElementById('подпись-показа');
+    if (!п) { п = document.createElement('div'); п.id = 'подпись-показа';
+      п.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:99999;background:#0f172a;color:#f8fafc;' +
+        'padding:10px 18px;font:16px/1.45 system-ui,sans-serif'; document.body.appendChild(п); }
+    п.textContent = ${JSON.stringify('')} + ${JSON.stringify(текст)}; return 1; })()`);
+  const ждатьПодпись = мс => process.env.SHOW_CAPTIONS ? new Promise(r => setTimeout(r, мс)) : null;
   await наСтраницеЧата('/chat');
   await открытьСессию('проверка-ревью');
   await новыйРазговорНаСтранице();
@@ -1244,8 +1252,11 @@ if (РЕЖИМ === 'ревью') {
   const абзац = await выполнить(`(document.getElementById('день-32') || {}).innerText || ''`);
   if (!/AI-ревью/.test(абзац)) ошибки.push('нет абзаца о Дне 32');
   const было = (await последнееРевью()).карточек;
-  await выполнить(`(() => { document.getElementById('чат-реплика').value = ${JSON.stringify('/review ' + диапазон)};
-    document.getElementById('чат-отправить').click(); return 'ок'; })()`);
+  await подписьРевью('Сцена 5 — тот же конвейер в чате агента (веб, стенд 5001): /review диапазон — ревью ветки, как PR; ход — по этапам под полем ввода');
+  await выполнить(`(() => { const п = document.getElementById('чат-реплика'); п.value = ${JSON.stringify('/review ' + диапазон)};
+    п.scrollIntoView({block: 'center'}); return 'ок'; })()`);
+  await ждатьПодпись(3000);
+  await выполнить(`(() => { document.getElementById('чат-отправить').click(); return 'ок'; })()`);
   const этапы = new Set();
   let р = {карточек: было};
   const начало = Date.now();
@@ -1262,6 +1273,14 @@ if (РЕЖИМ === 'ревью') {
   console.log('разделы:', (р.разделы || []).join('; '));
   for (const н of (р.находки || []).slice(0, 6)) console.log(`  [${н.раздел}/${н.серьёзность}] ${н.текст.replace(/\s+/g, ' ').slice(0, 140)}`);
   console.log('мета:', (р.мета || '').replace(/\s+/g, ' ').slice(0, 160));
+  if (process.env.SHOW_CAPTIONS) {
+    await выполнить(`(() => { const все = document.querySelectorAll('#чат-лента .сообщение.ревью');
+      const р = все[все.length - 1]; if (р) р.scrollIntoView({behavior: 'smooth', block: 'start'}); return 1; })()`);
+    await подписьРевью(`Сцена 5 — карточка: вердикт ${р.вердикт}, разделы «баги», «архитектура», «рекомендации», находки с файлом и строкой, опора; в истории чата — итог ревью`);
+    await ждатьПодпись(6000);
+    for (let i = 0; i < 4; i++) { await выполнить(`(() => { document.getElementById('чат-лента').scrollBy({top: 420, behavior: 'smooth'}); return 1; })()`); await ждатьПодпись(2500); }
+    await остановитьЗапись();
+  }
   if (р.карточек <= было) ошибки.push('/review: карточка не появилась');
   if ((р.разделы || []).length !== 3) ошибки.push('/review: в карточке не три раздела');
   if (process.env.REVIEW_EXPECT && р.вердикт !== process.env.REVIEW_EXPECT) ошибки.push(`/review: вердикт ${р.вердикт}, ожидался ${process.env.REVIEW_EXPECT}`);
@@ -2062,9 +2081,12 @@ if (РЕЖИМ === 'показ32') {
   const кКомментарию = () => кЭлементу(`[...document.querySelectorAll('.markdown-body')].find(e => /AI-ревью:/.test(e.innerText))`);
   const кЗаголовку = (текст) => кЭлементу(`[...document.querySelectorAll('.markdown-body h3, .markdown-body summary')].find(e => e.innerText.includes(${JSON.stringify(текст)}))`);
   const прокрутить = (пикселей) => выполнить(`(() => { window.scrollBy({top: ${пикселей}, behavior: 'smooth'}); return 'ок'; })()`);
+  // Анонимный API GitHub — 60 запросов в час: ожидание прогона их выбирало (второй дубль). Токен —
+  // только из окружения процесса (GH_API_TOKEN), в аргументы и журнал не попадает.
+  const заголовкиAPI = process.env.GH_API_TOKEN ? {Authorization: `Bearer ${process.env.GH_API_TOKEN}`} : {};
   const проверкиPR = async (номер) => {
-    const pr = await (await fetch(`https://api.github.com/repos/${РЕПО}/pulls/${номер}`)).json();
-    const р = await (await fetch(`https://api.github.com/repos/${РЕПО}/commits/${pr.head.sha}/check-runs`)).json();
+    const pr = await (await fetch(`https://api.github.com/repos/${РЕПО}/pulls/${номер}`, {headers: заголовкиAPI})).json();
+    const р = await (await fetch(`https://api.github.com/repos/${РЕПО}/commits/${pr.head.sha}/check-runs`, {headers: заголовкиAPI})).json();
     return {sha: pr.head.sha, прогоны: (р.check_runs || []).map(c => ({имя: c.name, статус: c.status, итог: c.conclusion, адрес: c.html_url}))};
   };
 

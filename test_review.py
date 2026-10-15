@@ -627,6 +627,15 @@ class Конвейер(_Репозиторий):
         и = self.выполнить({р: пусто for р in ("баги", "архитектура", "рекомендации")})
         self.assertEqual((и.вердикт, и.код_выхода), ("зелёный", 0))
 
+    def test_пустой_pr(self) -> None:
+        from agent.review import pipeline
+        with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "k", "MEMORY_DIR": self.tmp.name}):
+            и = pipeline.выполнить("pr", "pr", проект=self.проект, git=self.git_mcp(), поиск=Опора.поиск(self),
+                                   клиент_для=lambda: _Клиент({}))
+        self.assertEqual((и.вердикт, и.код_выхода), ("зелёный", 0))
+        self.assertIn("изменений относительно базы нет", и.текст)
+        self.assertEqual(и.метрики["сбои"], [])
+
     def test_нет_ключа(self) -> None:
         from agent.review import pipeline
         with mock.patch.dict(os.environ, {"DEEPSEEK_API_KEY": "", "MEMORY_DIR": self.tmp.name}):

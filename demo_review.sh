@@ -11,7 +11,7 @@
 # Имена переменных латиницей: bash не понимает кириллицу в идентификаторах.
 #
 # Запуск:
-#   bash demo_review.sh --pr-clean 2 --pr-seeded 3 --fix-branch demo/seeded --fix-dir out/wt-seeded
+#   bash demo_review.sh --pr-clean 2 --pr-seeded 3 --fix-branch demo/seeded --fix-dir out/wt-seeded --fix-commit SHA
 #   bash demo_review.sh ... --no-record      # без записи
 #   bash demo_review.sh ... --no-fix         # без сцены исправления
 set -u
@@ -28,6 +28,7 @@ PR_CLEAN=""
 PR_SEEDED=""
 FIX_BRANCH=""
 FIX_DIR=""
+FIX_COMMIT=""
 DEBUG_PORT="$("${PY}" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 
 while [ $# -gt 0 ]; do
@@ -39,6 +40,7 @@ while [ $# -gt 0 ]; do
     --pr-seeded) PR_SEEDED="$2"; shift ;;
     --fix-branch) FIX_BRANCH="$2"; shift ;;
     --fix-dir) FIX_DIR="$2"; shift ;;
+    --fix-commit) FIX_COMMIT="$2"; shift ;;
     -h|--help|--помощь) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "Не знаю ключа «$1»."; exit 1 ;;
   esac
@@ -51,12 +53,20 @@ command -v node >/dev/null 2>&1 || { echo "Нет node — им запускае
 FIX_CMD=""
 if [ "$FIX" = 1 ]; then
   [ -n "$FIX_BRANCH" ] && [ -d "$FIX_DIR" ] || { echo "Для сцены исправления нужны --fix-branch и --fix-dir (или --no-fix)"; exit 1; }
-  # Исправление — откат последнего коммита ветки (посеянных ошибок) новым коммитом, и push.
-  FIX_CMD="cd '$FIX_DIR' && git revert --no-edit HEAD >/dev/null && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS='$ROOT/out/askpass.sh' git push -q origin HEAD:refs/heads/$FIX_BRANCH"
+  # Исправление — готовый коммит (--fix-commit: настоящие правки по ревью) или, без него, откат
+  # посеянного коммита. Откат оставляет PR без изменений — ревьюить нечего, и «зелёный» ничего
+  # не доказывает (первая запись Дня 32), поэтому для показа нужен --fix-commit.
+  if [ -n "$FIX_COMMIT" ]; then
+    APPLY="git cherry-pick $FIX_COMMIT >/dev/null"
+  else
+    APPLY="git revert --no-edit HEAD >/dev/null"
+  fi
+  FIX_CMD="cd '$FIX_DIR' && $APPLY && GIT_TERMINAL_PROMPT=0 GIT_ASKPASS='$ROOT/out/askpass.sh' git push -q origin HEAD:refs/heads/$FIX_BRANCH"
 fi
 
 cleanup() {
-  [ -n "${CHROME_PID:-}" ] && kill "$CHROME_PID" 2>/dev/null
+  [ -n "${CHROME_PID:-}" ] && kill "$CHROME_PID" 2>/dev/null && wait "$CHROME_PID" 2>/dev/null
+  sleep 1      # Chrome дописывает профиль после сигнала — иначе rm оставляет каталог (первый дубль)
   rm -rf "${SCRATCH:?}"
 }
 trap cleanup EXIT INT TERM
@@ -81,6 +91,9 @@ else
   echo "2/4 Запись выключена"
 fi
 
+# Токен для API GitHub (лимит анонимных запросов — 60 в час) — в окружение процесса водителя, не в аргументы.
+GH_API_TOKEN="$("$PY" -c 'import sys; from dotenv import dotenv_values; print(dotenv_values(sys.argv[1]).get("GITHUB_PAT", ""))' "$ROOT/.env")"
+export GH_API_TOKEN
 echo "3/4 Сцены показа (исправление ждёт прогон Action — ≈ 1–2 мин)…"
 CDP="http://127.0.0.1:$DEBUG_PORT" PAUSE="$PAUSE" MARKS="$SCRATCH/marks.json" RECORD_CDP="$FILE" \
   GH_REPO="$REPO" PR_CLEAN="$PR_CLEAN" PR_SEEDED="$PR_SEEDED" FIX_CMD="$FIX_CMD" \

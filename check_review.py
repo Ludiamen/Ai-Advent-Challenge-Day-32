@@ -69,7 +69,10 @@ class Стенд:
 
     def __init__(self) -> None:
         os.makedirs(КАТАЛОГ, exist_ok=True)
-        self.база = evaluate.клон(КОРЕНЬ, РЕПО, "HEAD")
+        # Из снимка кода (out/snapshot.sh — без .git) клонируется настоящий корень: туда ведёт .venv.
+        источник = КОРЕНЬ if os.path.isdir(os.path.join(КОРЕНЬ, ".git")) else \
+            os.path.dirname(os.path.realpath(os.path.join(КОРЕНЬ, ".venv")))
+        self.база = evaluate.клон(источник, РЕПО, "HEAD")
         os.environ["PROJECT_ADVENT_DIR"] = РЕПО
         os.environ["MEMORY_DIR"] = os.path.join(КАТАЛОГ, "memory")
         self.проект = project.загрузить("advent")
