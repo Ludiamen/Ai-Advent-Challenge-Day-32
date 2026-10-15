@@ -50,7 +50,7 @@ from mcp_types import ToolAnnotations  # noqa: E402
 ПРЕДЕЛ_СТАТУСА = 200
 ТАЙМАУТ_С = 20.0
 # Подкоманды, которые сервер вообще умеет вызывать. Всё прочее — отказ до запуска git.
-РАЗРЕШЁННЫЕ = ("branch", "rev-parse", "status", "ls-files", "diff", "log", "show", "cat-file", "push",
+РАЗРЕШЁННЫЕ = ("branch", "rev-parse", "status", "ls-files", "diff", "log", "show", "cat-file",
                "merge-base", "grep")
 ПРЕДЕЛ_ФАЙЛА = 20_000
 ПРЕДЕЛ_ФАЙЛА_МАКС = 400_000
@@ -364,12 +364,6 @@ def git_grep(
     """Где в коммите (по умолчанию HEAD) встречается имя целым словом: путь, номер строки, строка.
     Нужен, чтобы найти места вызова изменённой функции."""
     return поиск(pattern, ref, path, limit)
-
-
-@сервер.tool(title="Отправить ветку", annotations=ЧТЕНИЕ)
-def git_push(branch: Ссылка = "") -> dict[str, Any]:
-    """Отправить текущую ветку в origin."""
-    return {"вывод": _git("push", "origin", _ссылка(branch or "HEAD"))}
 
 
 @сервер.tool(title="Журнал коммитов", annotations=ЧТЕНИЕ)

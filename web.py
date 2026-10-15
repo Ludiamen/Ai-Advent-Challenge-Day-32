@@ -1799,14 +1799,23 @@ def api_local_mark():
 
 @app.post("/api/quick")
 def api_quick():
-    """Короткий ответ модели без агента — быстрее."""
-    import httpx
-    вопрос = (request.get_json(silent=True) or {}).get("q", "")
-    ответ = httpx.post("https://api.deepseek.com/chat/completions",
-                       headers={"Authorization": f"Bearer {os.environ['DEEPSEEK_API_KEY']}"},
-                       json={"model": "deepseek-chat", "messages": [{"role": "user", "content": вопрос}]},
-                       timeout=60)
-    return jsonify({"answer": ответ.json()["choices"][0]["message"]["content"]})
+    """Короткий ответ модели без агента — через общий клиент llm.Client: повторы при 429 и
+    сбоях сети, учёт токенов, офлайн-предохранитель; модель — ds-flash из каталога."""
+    from agent.llm import Client, LLMError
+    from agent.local import offline
+    вопрос = ((request.get_json(silent=True) or {}).get("q") or "").strip()
+    if not вопрос:
+        return jsonify({"error": "Пустой вопрос."}), 400
+    if offline.включён():
+        return jsonify({"error": "Офлайн-режим: облачная модель недоступна."}), 400
+    клиент = Client()
+    try:
+        ответ = клиент.call("ds-flash", [{"role": "user", "content": вопрос[:4000]}], max_tokens=800)
+    except LLMError as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        клиент.close()
+    return jsonify({"answer": ответ.text, "tokens": ответ.total_tokens})
 
 
 @app.get("/api/health")
