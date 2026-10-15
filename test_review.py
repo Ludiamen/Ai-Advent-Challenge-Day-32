@@ -744,6 +744,11 @@ class GitHubАПИ(unittest.TestCase):
             self.assertEqual(review.адрес_прогона(), "https://github.com/u/r/actions/runs/42")
         with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": "42; rm -rf"}):
             self.assertEqual(review.адрес_прогона(), "")
+        for сервер, репо in (("javascript:alert(1)", "u/r"), ("https://github.com", "u/r](x"),
+                             ("http://github.com", "u/r")):
+            with self.subTest(сервер=сервер, репо=репо), mock.patch.dict(os.environ, {
+                    "GITHUB_SERVER_URL": сервер, "GITHUB_REPOSITORY": репо, "GITHUB_RUN_ID": "42"}):
+                self.assertEqual(review.адрес_прогона(), "")
 
     def test_нет_токена(self) -> None:
         from agent.review import github

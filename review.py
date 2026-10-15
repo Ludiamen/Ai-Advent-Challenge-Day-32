@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from typing import Any
@@ -55,10 +56,18 @@ def _ход(этап: str, подпись: str) -> None:
     print(f"· {этап}{': ' + подпись if подпись else ''}", flush=True)
 
 
+_СЕРВЕР = re.compile(r"^https://[A-Za-z0-9.-]+$")
+_РЕПО = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+
+
 def адрес_прогона() -> str:
-    """Адрес прогона GitHub Actions из окружения задания; локально — пусто."""
+    """Адрес прогона GitHub Actions из окружения задания; локально — пусто. Каждая часть
+    проверяется по формату: адрес идёт ссылкой в комментарий, и подменённое окружение не
+    должно вставить туда «javascript:» или разметку."""
     сервер, репо, ид = (os.environ.get(к, "") for к in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"))
-    return f"{сервер}/{репо}/actions/runs/{ид}" if сервер and репо and ид.isdigit() else ""
+    if _СЕРВЕР.match(сервер) and _РЕПО.match(репо) and ид.isdigit():
+        return f"{сервер}/{репо}/actions/runs/{ид}"
+    return ""
 
 
 def ревью_события(событие: gh.СобытиеPR, токен: str, канал: str = "github") -> int:
