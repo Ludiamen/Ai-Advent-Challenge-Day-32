@@ -414,6 +414,19 @@ class Ревьюеры(_Репозиторий):
         self.assertFalse(рек.ок)
         self.assertIn("сеть упала", рек.ошибка)
 
+    def test_оборванный_ответ_просит_короче(self) -> None:
+        from agent.review import prompts, reviewers
+        в, о, g = self.вход_и_опора()
+        оборван = _Ответ('{"находки": [{"файл": "a.py", "суть": "x"')
+        оборван.finish_reason = "length"
+        к = _Клиент({"баги": [оборван, _Ответ(json.dumps({"находки": []}))],
+                     "архитектура": {"находки": []}, "рекомендации": {"находки": []}})
+        баги = reviewers.выполнить_все(в, о, lambda: к, git=g)[0]
+        self.assertTrue(баги.ок and баги.повтор_формата)
+        последнее = [в_[2] for в_ in к.вызовы if в_[0] == "баги"][-1][-1]["content"]
+        self.assertEqual(последнее, prompts.ПОДСКАЗКА_ДЛИНЫ)
+        self.assertEqual(к.вызовы[0][3]["max_tokens"], reviewers.ОТВЕТ_ТОКЕНОВ)
+
     def test_таймаут(self) -> None:
         from agent.review import reviewers
         в, о, g = self.вход_и_опора()

@@ -26,7 +26,7 @@ from agent.review.source import ВходPR
 from agent.service import pd
 
 МОДЕЛЬ = "ds-flash"
-ОТВЕТ_ТОКЕНОВ = 2000
+ОТВЕТ_ТОКЕНОВ = 4000          # 2000 обрезали длинный список рекомендаций посреди JSON (PR #3 Дня 32)
 ТЕМПЕРАТУРА = 0.1
 КРУГОВ_ИНСТРУМЕНТА = 2
 ПРЕДЕЛ_ИНСТРУМЕНТА = 8000
@@ -205,8 +205,9 @@ class Ревьюер:
                 итог.находки, итог.итог = разобрать(self.раздел, r.text)
             except ОшибкаФормата:
                 итог.повтор_формата = True
+                оборван = getattr(r, "finish_reason", "") == "length"
                 сообщения += [{"role": "assistant", "content": r.text or ""},
-                              {"role": "user", "content": prompts.ПОДСКАЗКА_ФОРМАТА}]
+                              {"role": "user", "content": prompts.ПОДСКАЗКА_ДЛИНЫ if оборван else prompts.ПОДСКАЗКА_ФОРМАТА}]
                 r = self._звать(итог, сообщения, с_инструментом=False)
                 итог.находки, итог.итог = разобрать(self.раздел, r.text)
             итог.ок = True
