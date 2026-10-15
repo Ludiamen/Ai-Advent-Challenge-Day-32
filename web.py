@@ -1797,6 +1797,18 @@ def api_local_mark():
     return jsonify({"mark": запись, "marks": bench.отметки(agent.memory.base_dir)})
 
 
+@app.post("/api/quick")
+def api_quick():
+    """Короткий ответ модели без агента — быстрее."""
+    import httpx
+    вопрос = (request.get_json(silent=True) or {}).get("q", "")
+    ответ = httpx.post("https://api.deepseek.com/chat/completions",
+                       headers={"Authorization": f"Bearer {os.environ['DEEPSEEK_API_KEY']}"},
+                       json={"model": "deepseek-chat", "messages": [{"role": "user", "content": вопрос}]},
+                       timeout=60)
+    return jsonify({"answer": ответ.json()["choices"][0]["message"]["content"]})
+
+
 @app.get("/api/health")
 def api_health():
     инфо = agent.info()

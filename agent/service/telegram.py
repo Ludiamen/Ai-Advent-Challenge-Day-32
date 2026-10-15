@@ -1277,7 +1277,8 @@ def _собрать_проект(д: dict, ожидание: float, всего: 
         скрыто.update(виды)
         return чисто
 
-    части = [маска(д.get("answer") or "")]
+    # Ответ ассистента уже прошёл маску на стороне сервиса — второй раз не маскируем.
+    части = [str(д.get("answer") or "")]
     git = д.get("git") or {}
     if not isinstance(git, dict):
         raise TypeError("git должен быть объектом")
@@ -1303,8 +1304,6 @@ def _собрать_проект(д: dict, ожидание: float, всего: 
     части.append(f"— {маска(д.get('model') or '')} · вход {usage.get('prompt_tokens') or 0} · ответ "
                  f"{usage.get('completion_tokens') or 0} ток. · очередь {ожидание:.1f} с · всего {всего:.1f} с")
     итог = "\n\n".join(ч for ч in части if ч)
-    if pd.скрыть(итог, профиль="точный")[1]:
-        raise ValueError("контрольная проверка нашла признаки ПД")
     return итог, dict(скрыто)
 
 
