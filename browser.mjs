@@ -183,8 +183,10 @@ const начатьЗапись = async () => {
   const fs = await import('node:fs');
   const выход = process.env.RECORD_CDP;
   const ffmpeg = spawn('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-f', 'image2pipe', '-framerate', '10', '-i', '-',
-    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
-    '-pix_fmt', 'yuv420p', выход], {stdio: ['pipe', 'ignore', 'inherit']});
+    // setsar=1 и faststart: без них у записи пиксель «850:851» и индекс в конце файла — не всякий
+    // проигрыватель и не всякий просмотр в браузере это открывают.
+    '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20',
+    '-pix_fmt', 'yuv420p', '-movflags', '+faststart', выход], {stdio: ['pipe', 'ignore', 'inherit']});
   let кадр = null, кадров = 0;
   ws.addEventListener('message', (событие) => {
     const м = JSON.parse(событие.data);
@@ -1891,18 +1893,55 @@ if (РЕЖИМ === 'телеграм' || РЕЖИМ === 'телеграм31' || 
     const конецОжидания = Date.now() + 60000;
     while (process.env.RECORDING && !fs.existsSync(process.env.RECORDING) && Date.now() < конецОжидания) await подождать(200);
   }
-  await начатьЗапись();          // запись через CDP — только теперь, когда список чатов скрыт
+  // «телеграм32» начинает запись сам — когда уведомления AI-ревью уже найдены и стоят в кадре.
+  if (РЕЖИМ !== 'телеграм32') await начатьЗапись();          // запись через CDP — только теперь, когда список чатов скрыт
   if (РЕЖИМ === 'телеграм32') {
     // День 32: уведомление владельцу от AI-ревью PR (эскалация человеку, лекция недели 7). Скрипт
     // ничего не отправляет — только показывает последние сообщения бота в чате с ним.
+    // Первая запись (2026-10-15) была 9 с одного неподвижного кадра — владелец счёл, что видео «не
+    // открывается». Теперь сцена идёт по уведомлениям: каждое прокручивается в центр, обводится, а
+    // подпись читает его вердикт и счёт находок. После Дня 32 бот писал в тот же чат и другое —
+    // уведомления ищутся по тексту, прокруткой вверх (Telegram Web подгружает историю порциями).
     if (!(await чатБота())) throw new Error('открыт не чат с ботом');
-    await выполнить(`(() => { const п = document.querySelector('.bubbles .scrollable'); if (п) п.scrollTop = п.scrollHeight; return 1; })()`);
-    await подпись('Сцена 6', 'Эскалация человеку: при красном ревью, сбое пайплайна или тревоге метрик Action пишет владельцу в Telegram — номер и ссылка PR, вердикт, счёт находок; без кода и текстов находок');
-    const тексты = await выполнить(`[...document.querySelectorAll('.bubble.is-in')].slice(-6).map(б => (б.querySelector('.message') || {}).innerText || '')`);
-    const уведомления = (тексты || []).filter(т => /AI-ревью PR #\d+/.test(т));
-    console.log('уведомлений AI-ревью в последних сообщениях:', уведомления.length, уведомления.map(т => т.split('\n')[0]));
+    const прокрутить = (к) => выполнить(`(() => { const п = document.querySelector('.bubbles .scrollable');
+      if (!п) return 0; п.scrollTop = ${к === 'низ' ? 'п.scrollHeight' : `п.scrollTop - ${Number(к) || 0}`}; return п.scrollTop; })()`);
+    const найтиУведомления = () => выполнить(`[...document.querySelectorAll('.bubble.is-in')]
+      .filter(б => /AI-ревью PR #\\d+/.test((б.querySelector('.message') || {}).textContent || ''))
+      .map(б => ({mid: б.dataset.mid, текст: (б.querySelector('.message') || {}).innerText || ''}))`);
+    await прокрутить('низ');
+    await подождать(1500);
+    let уведомления = await найтиУведомления() || [];
+    for (let шаг = 0; !уведомления.length && шаг < 40; шаг++) {
+      await прокрутить(500);
+      await подождать(600);
+      уведомления = await найтиУведомления() || [];
+    }
+    console.log('уведомлений AI-ревью в чате:', уведомления.length, уведомления.map(у => у.текст.split('\n')[0]));
     должно(уведомления.length > 0, 'нет уведомления AI-ревью в чате с ботом');
-    await подождать(ПАУЗА * 3);
+    // Поиск листает чат до записи: в кадр не попадает то, что бот писал позже (уведомления Дня 35).
+    const вЦентр = (mid, как = 'smooth') => выполнить(`(() => { const б = document.querySelector('.bubble[data-mid="${mid}"]');
+      if (б) б.scrollIntoView({block: 'center', behavior: '${как}'}); return !!б; })()`);
+    if (уведомления.length) await вЦентр(уведомления[Math.floor(уведомления.length / 2)].mid, 'instant');
+    await подождать(800);
+    await начатьЗапись();
+    await подпись('Сцена 6', 'Эскалация человеку: при красном ревью, сбое пайплайна или тревоге метрик Action пишет владельцу в Telegram — номер и ссылка PR, вердикт, счёт находок; без кода и текстов находок');
+    await подождать(ПАУЗА * 1.5);
+    for (const [н, у] of уведомления.entries()) {
+      await выполнить(`(() => { document.querySelectorAll('.bubble[data-показ]').forEach(б => { б.style.outline = ''; б.removeAttribute('data-показ'); });
+        const б = document.querySelector('.bubble[data-mid="${у.mid}"]'); if (!б) return 0;
+        б.setAttribute('data-показ', '1'); б.style.outline = '3px solid #ef4444'; б.style.outlineOffset = '2px'; б.style.borderRadius = '12px';
+        б.scrollIntoView({block: 'center', behavior: 'smooth'}); return 1; })()`);
+      const строки = у.текст.split('\n').map(с => с.trim()).filter(Boolean);
+      const вердикт = (строки[0] || '').replace(/^\W+/u, '');
+      const критичных = (строки.find(с => /подтверждённых критичных/.test(с)) || '').replace(/\s*\(.*$/, '');
+      const находки = строки.find(с => /^Находки:/.test(с)) || '';
+      await подпись(`Сцена 6 · ${н + 1} из ${уведомления.length}`, `${вердикт}: ${критичных}; ${находки}. В сообщении — только номер и ссылка PR, вердикт и счёт; ни кода, ни текстов находок`);
+      await подождать(ПАУЗА * 2);
+    }
+    await выполнить(`(() => { document.querySelectorAll('.bubble[data-показ]').forEach(б => { б.style.outline = ''; б.removeAttribute('data-показ'); }); return 1; })()`);
+    if (уведомления.length) await вЦентр(уведомления[Math.floor(уведомления.length / 2)].mid);
+    await подпись('Сцена 6', `Итог: уведомлений в чате — ${уведомления.length}, по одному на каждый прогон Action с 🔴. На зелёный вердикт без тревог бот не пишет — после исправляющего коммита PR #3 сообщений нет`);
+    await подождать(ПАУЗА * 2);
     await остановитьЗапись();
     console.log('\n=== итог показа ===');
     console.log(замечания.length ? 'РАСХОЖДЕНИЯ:\n  ' + замечания.join('\n  ') : 'показ прошёл без расхождений');
